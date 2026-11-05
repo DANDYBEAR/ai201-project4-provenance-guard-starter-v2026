@@ -39,6 +39,63 @@
 <!-- The path a submission takes, from arriving to the label a reader sees.
      Six or seven steps — this is the trace you wrote in Milestone 1. -->
 
+1. A client sends `POST /submit` a JSON object containing the writer's `text`
+   and `creator_id`.
+2. The `/submit` route parses and validates those fields. It rejects malformed,
+   missing, empty, or unreasonably large input instead of trying to score it.
+3. The route creates a unique `content_id`, which connects this decision to its
+   audit history and to any later appeal.
+4. `detector.py::model_signal` reads the text with the local language model and
+   adds `model_score`, a 0–1 measure of how predictable the wording is. Higher
+   means more AI-like.
+5. `stylometry.py::style_signal` measures the text's sentence-length variation,
+   vocabulary repetition, and punctuation, and adds `style_score`, also on a
+   0–1 scale where higher means more AI-like.
+6. `scoring.py::combine_signals` combines the two signals into `confidence`.
+   Then `scoring.py::score_to_label` turns that number into a machine-readable
+   `guess` and a plain-English `label`.
+7. `audit.py::log_decision` stores the ID, writer, two signal scores, combined
+   score, guess, label, and status. The route returns the same decision fields,
+   and the client displays the label to the reader.
+
+### False-positive trace
+
+Consider a real writer using short sentences and common words, perhaps because
+English is not their first language. Suppose the model signal reads that very
+predictable prose as AI-like, the combined score is `0.72`, and the AI boundary
+is `0.65`. The service returns `guess: "ai"` and the reader sees: "This text has
+patterns that our two checks associate with AI-generated writing. This result
+is not proof of authorship, and the writer can appeal it."
+
+The writer can send the returned `content_id` and their explanation to
+`POST /appeal`. The service verifies the ID, appends the appeal to the audit
+log, changes the item's status to `under_review`, and confirms that a person
+should review the decision. The original score remains in the append-only log;
+the appeal does not silently erase it. This is why I plan to keep an uncertainty
+band between the human and AI labels: borderline evidence should not become a
+confident accusation.
+
+### Endpoint contracts
+
+`POST /submit`
+
+- Request JSON: `text` (string, the writing to assess) and `creator_id` (string,
+  the writer/account identifier).
+- Success response JSON: `content_id` (string UUID), `guess` (`"human"`,
+  `"unsure"`, or `"ai"`), `confidence` (number from 0.0 to 1.0; the combined
+  AI-likelihood score), `label` (reader-facing string), `model_score` (number
+  from 0.0 to 1.0), and `style_score` (number from 0.0 to 1.0).
+- Invalid-input response JSON: `error` (short machine-readable code) and
+  `message` (plain-English explanation), with an appropriate 4xx status.
+
+`POST /appeal`
+
+- Request JSON: `content_id` (string returned by `/submit`) and `reasoning`
+  (string explaining why the writer disputes the decision).
+- Success response JSON: `content_id` (string), `status` (`"under_review"`),
+  and `message` (plain-English confirmation).
+- Unknown-ID or invalid-input response JSON: `error` and `message`, with an
+  appropriate 4xx status. An unknown ID must not create an orphan appeal.
 
 
 ---
@@ -53,19 +110,38 @@
 
 ### Signal one — the model signal
 
-**What it measures:**
+**What it measures:** How predictable the submitted word sequence is to the
+local GPT-2 model. It calculates perplexity and converts it to a 0–1 score;
+lower perplexity becomes a higher, more AI-like score.
 
-**Why that might differ between human and AI writing:**
+**Why that might differ between human and AI writing:** A language model
+generates by repeatedly choosing likely next words, so generated prose often
+contains sequences another model finds easy to predict. Human prose may include
+more surprising word choices, specific details, and abrupt turns.
 
-**What it can't see:**
+**What it can't see:** It cannot see authorship or intent. Predictable human
+writing—plain language, a young writer's work, or writing by someone using a
+second language—can look AI-like. In the other direction, rare or ornate AI
+wording can look human merely because GPT-2 finds it surprising. The configured
+token limit also means it cannot evaluate text beyond the portion it reads.
 
 ### Signal two — the style signal
 
-**What it measures:**
+**What it measures:** The surface shape of the text: variation in sentence
+length, vocabulary repetition through the type-token ratio, and the amount and
+variety of punctuation. These measurements will be combined into a 0–1 score
+where higher means more AI-like.
 
-**Why that might differ between human and AI writing:**
+**Why that might differ between human and AI writing:** Generated prose often
+settles into even, medium-length sentences, repeats a narrower vocabulary, and
+uses punctuation in regular patterns. Human writing is often lumpier, with
+short and long sentences, uneven repetition, and idiosyncratic punctuation.
 
-**What it can't see:**
+**What it can't see:** It cannot understand meaning, factual accuracy,
+authorship, or intent. Cosmetic edits such as adding typos, splitting sentences,
+changing punctuation, or inserting a quotation can move the score without
+changing who wrote the underlying ideas. Genre and text length can also change
+these statistics, especially when a short sample provides too little variation.
 
 ### The combining rule
 

@@ -42,63 +42,71 @@ Two things worth knowing before you pick numbers:
   a **miss**.
 
 ---
-## 1.
+## 1. False positives stay at or below 10%
 
-<!-- Your criterion. It must name a number. -->
+For a set of 10 pieces written entirely by people, no more than 1 may receive
+the high-confidence AI label in any one trial. I will run the same set in three
+trials, so this limit must hold separately in all three trials rather than only
+after averaging their results.
 
-
-
-**Why this target:**
-
-
-
----
-
-## 2.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** A false accusation can damage a writer's credibility and
+is more costly than allowing some AI-written text through. A 10% ceiling is
+strict enough to expose a detector that routinely mistakes plain human writing
+for AI without pretending that this imperfect method can reach zero errors.
 
 ---
 
-## 3.
+## 2. Clearly different sources have a visible score spread
 
-<!-- Your criterion. -->
+For 5 clearly human-written samples and 5 unedited AI-generated samples, the
+AI set's mean combined score must be at least `0.20` higher than the human
+set's mean combined score in each of three trials.
 
-
-
-**Why this target:**
-
-
-
----
-
-## 4.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** A twenty-point gap on a 0–1 scale is large enough for the
+scores to support useful label boundaries. Comparing group means also avoids
+claiming that every individual sample will be separable when both signals have
+real blind spots.
 
 ---
 
-## 5.
+## 3. Every label is reachable
 
-<!-- Your criterion. -->
+Using a calibration set of 9 submissions, every trial must produce at
+least 1 `human`, 1 `unsure`, and 1 `ai` guess. The returned reader-facing label
+must match the guess and its configured score range for all 9 submissions.
 
+**Why this target:** A three-label design is misleading if one label can never
+be returned. Requiring examples on both sides and inside the uncertainty band
+also catches gaps, overlaps, or reversed threshold comparisons.
 
+---
 
-**Why this target:**
+## 4. Appeals always enter review and remain auditable
 
+For 5 valid `content_id` values, all 5 appeal requests must return HTTP `200`,
+return the matching ID with `status: "under_review"`, and append exactly 1
+appeal log entry containing the submitted reasoning. An appeal using an unknown
+ID must return HTTP `404` and append 0 appeal entries.
 
+**Why this target:** The appeal is the writer's only direct remedy for a false
+positive, so partial success is not acceptable. Checking both the response and
+append-only log proves that the visible confirmation corresponds to a durable,
+reviewable event and that invalid IDs cannot create orphan records.
+
+---
+
+## 5. Bad text input fails safely and consistently
+
+Each of these 5 `/submit` cases must return HTTP `400` with JSON `error` and
+`message` fields and must not call either scoring signal: a missing `text`
+field, `text: ""`, whitespace-only text, a non-string `text`, and text longer
+than `20,000` characters. None may return HTTP `500` or create a decision log
+entry.
+
+**Why this target:** These cases define an observable boundary between a bad
+request and an internal failure. The 20,000-character cap permits substantial
+writing while preventing the service from spending model time on input far
+beyond the detector's configured 400-token reading window.
 
 ---
 
