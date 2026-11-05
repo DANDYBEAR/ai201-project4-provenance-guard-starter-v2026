@@ -130,7 +130,10 @@ token limit also means it cannot evaluate text beyond the portion it reads.
 **What it measures:** The surface shape of the text: variation in sentence
 length, vocabulary repetition through the type-token ratio, and the amount and
 variety of punctuation. These measurements will be combined into a 0–1 score
-where higher means more AI-like.
+where higher means more AI-like. Inside the style score, normalized sentence
+spread counts for `0.50`, vocabulary diversity for `0.35`, and internal
+punctuation density for `0.15`; punctuation receives the least weight because
+it is especially easy to manipulate.
 
 **Why that might differ between human and AI writing:** Generated prose often
 settles into even, medium-length sentences, repeats a narrower vocabulary, and
@@ -148,16 +151,53 @@ these statistics, especially when a short sample provides too little variation.
 <!-- Write the rule in words, then give the numbers. What happens when the two
      signals disagree? -->
 
-**The rule:**
+**The rule:** Take an equal-weighted average of the model score and style
+score, after validating that both are on the 0–1 scale. Both signals have real
+but different blind spots, so neither gets to overrule the other by itself.
+When they strongly disagree, their average moves toward `0.50`, which treats
+the disagreement as uncertainty instead of turning one weak signal into a
+confident accusation.
 
-**The numbers:**
+**The numbers:** `0.50 × model_score + 0.50 × style_score`, rounded to four
+decimal places. The weights live in `config.py` as
+`WEIGHT_MODEL_SIGNAL = 0.5` and `WEIGHT_STYLE_SIGNAL = 0.5`. The current
+threshold settings are `0.35` for human and `0.65` for AI, leaving the middle
+as the uncertainty band; reader-facing labels are added in Milestone 5.
 
 **Where it lives:** `scoring.py::combine_signals`
 
 <!-- ⚠️ The grader checks your code against that line. If your rule lives
      somewhere else, say where. -->
 
-**A case where my two signals split, and what my rule does with it:**
+I ran both signals on the same three pieces used for the model-only check:
+
+| Same test piece | Model | Style | Combined | Agreement |
+|---|---:|---:|---:|---|
+| Formulaic AI-style prose | 0.8203 | 0.4781 | 0.6492 | Split |
+| Specific human anecdote | 0.4202 | 0.4505 | 0.4354 | Agree: humanward |
+| Borderline neutral report | 0.4336 | 0.2861 | 0.3599 | Agree: humanward |
+
+**A case where my two signals split, and what my rule does with it:** The
+formulaic AI sample scored `0.8203` on the model signal but only `0.4781` on
+the style signal, a gap of `0.3422`. The equal-weight rule returned `0.6492`,
+pulling the model's strong AI reading back to the edge of the uncertainty band.
+The style score was lower because this short sample had unusually high
+vocabulary variety and enough punctuation to look less machine-like to the
+surface-only measures.
+
+### Milestone 4 calibration
+
+| Deliberately chosen input | Model | Style | Combined | What I learned |
+|---|---:|---:|---:|---|
+| Clearly AI, unedited | 0.7833 | 0.3107 | 0.5470 | The signals split; the average becomes uncertain. |
+| Clearly human, public-domain narrative | 0.5054 | 0.5181 | 0.5117 | Both signals were uncertain on a short, regular passage. |
+| Formal human, public speech | 0.6875 | 0.5203 | 0.6039 | Formal, predictable human prose risks a false positive. |
+| Lightly edited AI | 0.2908 | 0.1169 | 0.2039 | Surface edits fooled both signals toward human. |
+
+The last two cases are the important failure pair. The formal human sample is
+more AI-like than the edited AI sample, so neither a weighted average nor a
+threshold can repair those inputs after both signals point the wrong way. The
+audit log therefore records both component scores, not only the combined one.
 
 
 
@@ -197,15 +237,39 @@ these statistics, especially when a short sample provides too little variation.
      two off the response, so leaving them out costs you next unit's
      diagnostics. -->
 
-```bash
-$ curl -X POST http://127.0.0.1:5000/submit \
-  -H "Content-Type: application/json" \
-  -d '{"text": "...", "creator_id": "..."}'
+Before wiring the route, I ran `detector.py` by itself on three samples:
+
+| Sample | Perplexity | Model signal |
+|---|---:|---:|
+| Formulaic AI-style prose | 17.4 | 0.8203 |
+| Specific human anecdote | 55.0 | 0.4202 |
+| Borderline neutral report | 53.2 | 0.4336 |
+
+The AI-style sample scored much higher, but the human and borderline samples
+were close. That matches the model signal's blind spot: predictability is not
+the same as authorship.
+
+I started this validation run with `PORT=5052` so it was isolated from earlier
+development-server checks.
+
+```powershell
+curl.exe -sS -X POST http://127.0.0.1:5052/submit -H "Content-Type: application/json" -d '{\"text\": \"In a rapidly evolving digital landscape, organizations must leverage innovative technologies to enhance efficiency and drive sustainable growth. By adopting a strategic approach, businesses can streamline operations, improve decision-making, and unlock new opportunities. Ultimately, successful implementation requires careful planning, collaboration, and continuous improvement.\", \"creator_id\": \"milestone4-check\"}'
 ```
 
 ```json
-
+{
+  "confidence": 0.547,
+  "content_id": "9a943783-61e5-4b76-a6ba-2c757ece39b3",
+  "creator_id": "milestone4-check",
+  "guess": "ai",
+  "label": "Pending reader-facing label mapping.",
+  "model_score": 0.7833,
+  "style_score": 0.3107
+}
 ```
+
+`confidence` is the real combined score. The reader-facing `label` remains an
+explicit placeholder until Milestone 5.
 
 **An appeal**
 
@@ -221,12 +285,27 @@ $ curl -X POST http://127.0.0.1:5000/appeal \
 
 **What the log shows afterwards**
 
-```bash
-$ curl "http://127.0.0.1:5000/log?limit=3"
+```powershell
+curl.exe -sS "http://127.0.0.1:5052/log?limit=1"
 ```
 
 ```json
-
+{
+  "count": 1,
+  "entries": [
+    {
+      "combined_score": 0.547,
+      "content_id": "9a943783-61e5-4b76-a6ba-2c757ece39b3",
+      "creator_id": "milestone4-check",
+      "guess": "ai",
+      "label": "Pending reader-facing label mapping.",
+      "model_score": 0.7833,
+      "status": "decided",
+      "style_score": 0.3107,
+      "timestamp": "2026-11-05T01:48:24+00:00"
+    }
+  ]
+}
 ```
 
 ---

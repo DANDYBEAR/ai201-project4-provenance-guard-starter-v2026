@@ -1,5 +1,5 @@
 """
-Signal two: the style signal. ← YOU BUILD THIS IN MILESTONE 4
+Signal two: the style signal.
 
 Signal one reads the text for meaning. This one measures it *as text* — the
 shape of it, without understanding a word.
@@ -49,7 +49,7 @@ def words(text: str) -> list[str]:
 
 def sentence_length_spread(text: str) -> float:
     """
-    How much sentence length varies. ← TODO
+    How much sentence length varies.
 
     Returns:
         A float. Decide yourself what scale it's on and which direction means
@@ -64,13 +64,24 @@ def sentence_length_spread(text: str) -> float:
     `stdev` raises on fewer than two values. Decide what that should return
     before the attack set decides for you.
     """
-    # TODO: replace this
-    return 0.0
+    lengths = [len(words(sentence)) for sentence in sentences(text)]
+    lengths = [length for length in lengths if length > 0]
+    if len(lengths) < 2:
+        return 0.0
+
+    mean_length = statistics.mean(lengths)
+    if mean_length == 0:
+        return 0.0
+
+    # Coefficient of variation keeps a ten-word sample comparable with a
+    # hundred-word sample. Higher means more uneven, and therefore more
+    # human-like for this signal.
+    return round(statistics.stdev(lengths) / mean_length, 4)
 
 
 def type_token_ratio(text: str) -> float:
     """
-    Unique words over total words. ← TODO
+    Unique words over total words.
 
     Returns:
         A float between 0 and 1. Higher means more varied vocabulary.
@@ -80,13 +91,15 @@ def type_token_ratio(text: str) -> float:
     directly comparable on it, and if your test inputs vary a lot in length,
     that alone can look like a signal.
     """
-    # TODO: replace this
-    return 0.0
+    tokens = words(text)
+    if not tokens:
+        return 0.0
+    return round(len(set(tokens)) / len(tokens), 4)
 
 
 def punctuation_density(text: str) -> float:
     """
-    How much punctuation, relative to length. ← TODO
+    How much punctuation, relative to length.
 
     Returns:
         A float. Whether you count all punctuation or only some kinds — commas,
@@ -94,15 +107,24 @@ def punctuation_density(text: str) -> float:
         more interesting than full stops, because they vary more between
         writers.
     """
-    # TODO: replace this
-    return 0.0
+    token_count = len(words(text))
+    if token_count == 0:
+        return 0.0
+
+    # Full stops mostly reveal the number of sentences. Internal and
+    # expressive marks carry more stylistic information, so count those per
+    # word instead of letting periods duplicate the spread measure.
+    punctuation_count = len(
+        re.findall(r"[,;:!?()\[\]{}\-\u2013\u2014]", text)
+    )
+    return round(punctuation_count / token_count, 4)
 
 
 # ── Combining them ───────────────────────────────────────────────────────────
 
 def style_signal(text: str) -> float:
     """
-    The style signal as a 0–1 score. **Higher means more likely AI.** ← TODO
+    The style signal as a 0–1 score. **Higher means more likely AI.**
 
     Combine your three measures into one number. Same direction as
     `detector.model_signal`, so that `scoring.combine_signals` can treat them
@@ -122,8 +144,35 @@ def style_signal(text: str) -> float:
     you trust it. Plain and ordinary, not formal: formal prose reads as *human*
     to signal one, and it is plain writing that gets accused.
     """
-    # TODO: replace this
-    return 0.5
+    token_count = len(words(text))
+    if token_count < 3:
+        raise ValueError("Text is too short to score — a few words at least.")
+
+    spread = sentence_length_spread(text)
+    diversity = type_token_ratio(text)
+    punctuation = punctuation_density(text)
+
+    # Put all three measures on the same 0–1, higher-is-more-AI scale.
+    # A coefficient of variation at or above 0.75 counts as fully human-like.
+    # A type-token ratio from 0.50 to 0.90 spans the useful range for these
+    # short submissions. Internal punctuation at 0.12 marks per word is the
+    # point at which this deliberately weak component is fully human-like.
+    if len(sentences(text)) < 2:
+        spread_ai = 0.5  # one sentence gives no evidence about variation
+    else:
+        spread_ai = 1.0 - min(max(spread / 0.75, 0.0), 1.0)
+
+    vocabulary_ai = min(max((0.90 - diversity) / 0.40, 0.0), 1.0)
+    punctuation_ai = 1.0 - min(max(punctuation / 0.12, 0.0), 1.0)
+
+    # Sentence rhythm is the strongest style cue, while punctuation is easy
+    # to manipulate and therefore gets the smallest share.
+    score = (
+        0.50 * spread_ai
+        + 0.35 * vocabulary_ai
+        + 0.15 * punctuation_ai
+    )
+    return round(min(max(score, 0.0), 1.0), 4)
 
 
 if __name__ == "__main__":
@@ -139,4 +188,4 @@ if __name__ == "__main__":
     print(f"type_token_ratio         {type_token_ratio(text)}")
     print(f"punctuation_density      {punctuation_density(text)}")
     print(f"style_signal             {style_signal(text)}   (higher = more likely AI)")
-    print("\nAll zeros? These are stubs — Milestone 4 is where you build them.")
+    print("\nRaw measures point humanward when they rise; style_signal flips them.")
