@@ -63,9 +63,9 @@
 Consider a real writer using short sentences and common words, perhaps because
 English is not their first language. Suppose the model signal reads that very
 predictable prose as AI-like, the combined score is `0.72`, and the AI boundary
-is `0.65`. The service returns `guess: "ai"` and the reader sees: "This text has
-patterns that our two checks associate with AI-generated writing. This result
-is not proof of authorship, and the writer can appeal it."
+is `0.65`. The service returns `guess: "ai"` and the reader sees: "We found
+patterns often associated with AI-generated writing, but this is not proof of
+authorship. The writer can appeal this result for human review."
 
 The writer can send the returned `content_id` and their explanation to
 `POST /appeal`. The service verifies the ID, appends the appeal to the audit
@@ -212,16 +212,31 @@ audit log therefore records both component scores, not only the combined one.
 
 | Label | Score range | The exact text a reader sees |
 |---|---|---|
-| high-confidence human |  |  |
-| unsure |  |  |
-| high-confidence AI |  |  |
+| high-confidence human | 0.00–0.35, inclusive | We think this was probably written by a person. Automated checks can be wrong. |
+| unsure | greater than 0.35 and less than 0.65 | We cannot reliably tell how this text was written. No conclusion about the writer should be drawn from this result. |
+| high-confidence AI | 0.65–1.00, inclusive | We found patterns often associated with AI-generated writing, but this is not proof of authorship. The writer can appeal this result for human review. |
 
 **Why I worded the "unsure" one this way:**
 <!-- It's the hardest of the three. It has to admit uncertainty without
      sounding like an accusation, because the person reading it may well have
      written every word themselves. -->
 
+It says directly that the system cannot make a reliable judgment and tells the
+reader not to treat uncertainty as evidence against the writer. From the
+writer's perspective, it communicates "the tool does not know" rather than
+"you are suspicious," so there is no accusation they are expected to rebut.
 
+**Reachability check with real submissions:**
+
+| Returned guess | Combined score | Content ID |
+|---|---:|---|
+| human | 0.2039 | `29ca20f1-dc56-42ad-84b4-c5456c96f313` |
+| unsure | 0.6039 | `b568df53-3966-463a-b393-9315cf86c137` |
+| ai | 0.8620 | `670e4575-55c8-41c6-859b-e5faab944bc0` |
+
+All three ranges are reachable. The input that reached the human range was
+lightly edited AI text, so reachability is not evidence that the judgment was
+correct; it is another concrete example of the style signal's blind spot.
 
 ---
 
@@ -249,60 +264,89 @@ The AI-style sample scored much higher, but the human and borderline samples
 were close. That matches the model signal's blind spot: predictability is not
 the same as authorship.
 
-I started this validation run with `PORT=5052` so it was isolated from earlier
+I started this validation run with `PORT=5053` so it was isolated from earlier
 development-server checks.
 
 ```powershell
-curl.exe -sS -X POST http://127.0.0.1:5052/submit -H "Content-Type: application/json" -d '{\"text\": \"In a rapidly evolving digital landscape, organizations must leverage innovative technologies to enhance efficiency and drive sustainable growth. By adopting a strategic approach, businesses can streamline operations, improve decision-making, and unlock new opportunities. Ultimately, successful implementation requires careful planning, collaboration, and continuous improvement.\", \"creator_id\": \"milestone4-check\"}'
+curl.exe -sS -X POST http://127.0.0.1:5053/submit -H "Content-Type: application/json" -d '{\"text\": \"The system works well. The system works fast. The system works every day. The system helps many users. The system gives good results. The system makes work easy.\", \"creator_id\": \"label-ai-check\"}'
 ```
 
 ```json
 {
-  "confidence": 0.547,
-  "content_id": "9a943783-61e5-4b76-a6ba-2c757ece39b3",
-  "creator_id": "milestone4-check",
+  "confidence": 0.862,
+  "content_id": "670e4575-55c8-41c6-859b-e5faab944bc0",
+  "creator_id": "label-ai-check",
   "guess": "ai",
-  "label": "Pending reader-facing label mapping.",
-  "model_score": 0.7833,
-  "style_score": 0.3107
+  "label": "We found patterns often associated with AI-generated writing, but this is not proof of authorship. The writer can appeal this result for human review.",
+  "model_score": 0.8603,
+  "style_score": 0.8637
 }
 ```
 
-`confidence` is the real combined score. The reader-facing `label` remains an
-explicit placeholder until Milestone 5.
-
 **An appeal**
 
-```bash
-$ curl -X POST http://127.0.0.1:5000/appeal \
-  -H "Content-Type: application/json" \
-  -d '{"content_id": "...", "reasoning": "..."}'
+```powershell
+curl.exe -sS -X POST http://127.0.0.1:5053/appeal -H "Content-Type: application/json" -d '{\"content_id\": \"670e4575-55c8-41c6-859b-e5faab944bc0\", \"reasoning\": \"I wrote this myself. The repeated sentence structure was a deliberate plain-language choice.\"}'
 ```
 
 ```json
-
+{
+  "content_id": "670e4575-55c8-41c6-859b-e5faab944bc0",
+  "message": "Your appeal was recorded and is now under human review.",
+  "status": "under_review"
+}
 ```
 
 **What the log shows afterwards**
 
 ```powershell
-curl.exe -sS "http://127.0.0.1:5052/log?limit=1"
+curl.exe -sS "http://127.0.0.1:5053/log?limit=4"
 ```
 
 ```json
 {
-  "count": 1,
+  "count": 4,
   "entries": [
     {
-      "combined_score": 0.547,
-      "content_id": "9a943783-61e5-4b76-a6ba-2c757ece39b3",
-      "creator_id": "milestone4-check",
+      "combined_score": 0.862,
+      "content_id": "670e4575-55c8-41c6-859b-e5faab944bc0",
+      "creator_id": "label-ai-check",
       "guess": "ai",
-      "label": "Pending reader-facing label mapping.",
-      "model_score": 0.7833,
+      "label": "We found patterns often associated with AI-generated writing, but this is not proof of authorship. The writer can appeal this result for human review.",
+      "model_score": 0.8603,
       "status": "decided",
-      "style_score": 0.3107,
-      "timestamp": "2026-11-05T01:48:24+00:00"
+      "style_score": 0.8637,
+      "timestamp": "2026-11-05T01:57:35+00:00"
+    },
+    {
+      "combined_score": 0.2039,
+      "content_id": "29ca20f1-dc56-42ad-84b4-c5456c96f313",
+      "creator_id": "label-human-check",
+      "guess": "human",
+      "label": "We think this was probably written by a person. Automated checks can be wrong.",
+      "model_score": 0.2908,
+      "status": "decided",
+      "style_score": 0.1169,
+      "timestamp": "2026-11-05T01:57:41+00:00"
+    },
+    {
+      "combined_score": 0.6039,
+      "content_id": "b568df53-3966-463a-b393-9315cf86c137",
+      "creator_id": "label-unsure-check",
+      "guess": "unsure",
+      "label": "We cannot reliably tell how this text was written. No conclusion about the writer should be drawn from this result.",
+      "model_score": 0.6875,
+      "status": "decided",
+      "style_score": 0.5203,
+      "timestamp": "2026-11-05T01:57:46+00:00"
+    },
+    {
+      "content_id": "670e4575-55c8-41c6-859b-e5faab944bc0",
+      "creator_id": "label-ai-check",
+      "event": "appeal",
+      "reasoning": "I wrote this myself. The repeated sentence structure was a deliberate plain-language choice.",
+      "status": "under_review",
+      "timestamp": "2026-11-05T01:57:52+00:00"
     }
   ]
 }
