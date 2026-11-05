@@ -358,15 +358,31 @@ curl.exe -sS "http://127.0.0.1:5053/log?limit=4"
 
 **Moment 1**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I asked AI to help trace the submission pipeline, name
+  both signals' blind spots, and turn the assignment prompts into five
+  measurable acceptance criteria before I built the service.
+- *What came back:* It proposed a seven-step route-to-label trace, an endpoint
+  contract, a false-positive scenario, and numerical criteria for false
+  positives, score spread, label reachability, appeals, and invalid input.
+- *What I changed:* I tied the trace to this starter's actual files and audit
+  fields, set the input limit to 20,000 characters, and made the 10% false-
+  positive limit apply separately to each of three trials instead of hiding a
+  bad run inside an overall average.
 
 **Moment 2**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I asked AI to help implement and test the style signal,
+  combine it with the model signal, write reader-facing labels, and build the
+  appeal route without skipping the required standalone and `curl` checks.
+- *What came back:* It suggested normalized sentence spread, vocabulary ratio,
+  and punctuation measures; an equal-weight combining rule; cautious label
+  text; and an append-only appeal flow. The calibration exposed a serious
+  failure: formal human prose scored `0.6039`, while lightly edited AI scored
+  only `0.2039`.
+- *What I changed:* I gave punctuation only 15% of the style score because it
+  is easy to manipulate, kept disagreement near the unsure band, revised the
+  AI label to say the result is not proof and offer human review, and recorded
+  the surprising calibration results instead of tuning them away.
 
 <!-- ═══════════════════════ UNIT 8 — THE TEST ═══════════════════════ -->
 
