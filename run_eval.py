@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import json
 import sys
+import uuid
 from pathlib import Path
 
 import config
@@ -64,6 +65,114 @@ def describe(body):
         text = body["text"]
         return text[:70] if text else "(empty text)"
     return json.dumps(body)[:120]
+
+
+def _json_or_error(response):
+    """Return a JSON object without hiding a non-JSON server failure."""
+    try:
+        return response.json() if response.content else {}
+    except ValueError as exc:
+        return {"parse_error": f"{type(exc).__name__}: {exc}"}
+
+
+def _log_entries(requests, url, timeout):
+    response = requests.get(f"{url}/log", timeout=timeout)
+    response.raise_for_status()
+    return response.json().get("entries", [])
+
+
+def run_appeal_trial(requests, url, scenario, trial, timeout):
+    """Submit five items, appeal each, then test one unknown content ID."""
+    results = []
+    for case, body in enumerate(bodies_for(scenario), 1):
+        submission = requests.post(f"{url}/submit", json=body, timeout=timeout)
+        submitted = _json_or_error(submission)
+        content_id = submitted.get("content_id")
+        result = {
+            "case": case,
+            "submit_status": submission.status_code,
+            "content_id": content_id,
+        }
+
+        if content_id:
+            reasoning = f"Trial {trial}, case {case}: I wrote this and request human review."
+            before = _log_entries(requests, url, timeout)
+            before_count = sum(
+                entry.get("event") == "appeal" and entry.get("content_id") == content_id
+                for entry in before
+            )
+            appeal = requests.post(
+                f"{url}/appeal",
+                json={"content_id": content_id, "reasoning": reasoning},
+                timeout=timeout,
+            )
+            appealed = _json_or_error(appeal)
+            after = _log_entries(requests, url, timeout)
+            matching = [
+                entry for entry in after
+                if entry.get("event") == "appeal" and entry.get("content_id") == content_id
+            ]
+            result.update({
+                "appeal_status": appeal.status_code,
+                "appeal_content_id": appealed.get("content_id"),
+                "status": appealed.get("status"),
+                "reasoning": reasoning,
+                "appeal_entries_added": len(matching) - before_count,
+                "reasoning_recorded": any(
+                    entry.get("reasoning") == reasoning for entry in matching
+                ),
+            })
+        else:
+            result["submit_response"] = submitted
+        results.append(result)
+
+    unknown_id = f"unknown-{trial}-{uuid.uuid4()}"
+    reasoning = "This ID should not create an orphan appeal."
+    before = _log_entries(requests, url, timeout)
+    before_count = sum(entry.get("content_id") == unknown_id for entry in before)
+    response = requests.post(
+        f"{url}/appeal",
+        json={"content_id": unknown_id, "reasoning": reasoning},
+        timeout=timeout,
+    )
+    after = _log_entries(requests, url, timeout)
+    results.append({
+        "case": "unknown_content_id",
+        "content_id": unknown_id,
+        "appeal_status": response.status_code,
+        "error": _json_or_error(response).get("error"),
+        "appeal_entries_added": sum(
+            entry.get("content_id") == unknown_id for entry in after
+        ) - before_count,
+    })
+    return results
+
+
+def run_bad_input_trial(requests, url, scenario, timeout):
+    """Send invalid bodies and prove none creates a decision log entry."""
+    results = []
+    for body in bodies_for(scenario):
+        creator_id = body.get("creator_id")
+        before = _log_entries(requests, url, timeout)
+        before_count = sum(
+            entry.get("creator_id") == creator_id and entry.get("status") == "decided"
+            for entry in before
+        )
+        response = requests.post(f"{url}/submit", json=body, timeout=timeout)
+        payload = _json_or_error(response)
+        after = _log_entries(requests, url, timeout)
+        after_count = sum(
+            entry.get("creator_id") == creator_id and entry.get("status") == "decided"
+            for entry in after
+        )
+        results.append({
+            "status": response.status_code,
+            "error": payload.get("error"),
+            "message": payload.get("message"),
+            "decision_entries_added": after_count - before_count,
+            "sent": describe(body),
+        })
+    return results
 
 
 def main():
@@ -112,29 +221,44 @@ def main():
 
         trials = []
         for trial in range(1, args.trials + 1):
-            results = []
-            for i, body in enumerate(bodies_for(scenario), 1):
-                preview = describe(body)
-                try:
-                    response = requests.post(f"{args.url}/submit", json=body,
-                                             timeout=args.timeout)
-                    payload = response.json() if response.content else {}
-                    results.append({
-                        "status": response.status_code,
-                        "guess": payload.get("guess"),
-                        "confidence": payload.get("confidence"),
-                        "model_score": payload.get("model_score"),
-                        "style_score": payload.get("style_score"),
-                        "label": payload.get("label"),
-                        "sent": preview,
-                    })
-                except Exception as exc:  # noqa: BLE001
-                    results.append({"status": None, "error": f"{type(exc).__name__}: {exc}",
-                                    "sent": preview})
+            kind = scenario.get("kind")
+            if kind == "appeal":
+                results = run_appeal_trial(
+                    requests, args.url, scenario, trial, args.timeout
+                )
+            elif kind == "bad_input":
+                results = run_bad_input_trial(
+                    requests, args.url, scenario, args.timeout
+                )
+            else:
+                results = []
+                for i, body in enumerate(bodies_for(scenario), 1):
+                    preview = describe(body)
+                    try:
+                        response = requests.post(f"{args.url}/submit", json=body,
+                                                 timeout=args.timeout)
+                        payload = _json_or_error(response)
+                        results.append({
+                            "status": response.status_code,
+                            "guess": payload.get("guess"),
+                            "confidence": payload.get("confidence"),
+                            "model_score": payload.get("model_score"),
+                            "style_score": payload.get("style_score"),
+                            "label": payload.get("label"),
+                            "sent": preview,
+                        })
+                    except Exception as exc:  # noqa: BLE001
+                        results.append({"status": None, "error": f"{type(exc).__name__}: {exc}",
+                                        "sent": preview})
 
             trials.append(results)
-            guesses = [r.get("guess") or "—" for r in results]
-            print(f"  trial {trial}: {', '.join(guesses)}")
+            if kind == "appeal":
+                summary = [str(r.get("appeal_status") or "—") for r in results]
+            elif kind == "bad_input":
+                summary = [str(r.get("status") or "—") for r in results]
+            else:
+                summary = [r.get("guess") or "—" for r in results]
+            print(f"  trial {trial}: {', '.join(summary)}")
 
         rows.append({"scenario": scenario, "trials": trials})
 

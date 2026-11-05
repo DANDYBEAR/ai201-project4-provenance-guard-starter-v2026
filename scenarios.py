@@ -22,49 +22,134 @@ A scenario carries **either** of these:
               because you cannot express "the field is missing" as a string.
 """
 
+import csv
+from pathlib import Path
+
+
+def _attack_text(attack_id: str) -> str:
+    """Reuse a known calibration input without duplicating the attack text."""
+    path = Path(__file__).parent / "attack_set" / "attacks.csv"
+    with path.open(encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row["id"] == attack_id:
+                return row["text"]
+    raise ValueError(f"attack {attack_id!r} was not found in {path}")
+
+
+PERSONAL_STYLE_SAMPLES = [
+    (
+        "I had to restart this assignment because I missed one small setting. "
+        "After I slowed down and read the file again, the problem made more sense."
+    ),
+    (
+        "When I learn new code I like to test one part at a time. If I change too "
+        "many things together, I dont know which change caused the error."
+    ),
+    (
+        "My group had a hard time picking who would do each part of the project. "
+        "We made a short list and split the work, which made it less confusing."
+    ),
+    (
+        "I went to the store after class and forgot the main thing I needed. I got "
+        "snacks and a drink, but I had to go back later for the charger."
+    ),
+    (
+        "The bus was late this morning so I got to class a few minutes behind. I "
+        "sent a message before class started because I did not want it to look like I forgot."
+    ),
+    (
+        "I understand the lesson better when I can see a real example. Reading the "
+        "definition helps, but trying it myself is what makes it stay in my head."
+    ),
+    (
+        "I tried making dinner without checking the recipe first. It came out okay, "
+        "but I used too much salt and next time I will measure it."
+    ),
+    (
+        "I cleaned my room this weekend and found notes from an older class. I kept "
+        "the useful pages and threw away the papers I knew I would never read again."
+    ),
+    (
+        "The hardest part of this project was not writing the code. It was figuring "
+        "out what the results meant and how to explain them in a simple way."
+    ),
+    (
+        "I usually write my first draft fast and fix it after. That works better for "
+        "me because stopping for every sentence makes me lose my idea."
+    ),
+]
+
+
+AI_SAMPLES = [
+    (
+        "Effective project management requires careful planning, clear communication, "
+        "and consistent evaluation. By following these principles, teams can improve "
+        "productivity, reduce risk, and achieve successful outcomes."
+    ),
+    (
+        "Technology plays an important role in modern education. It provides students "
+        "with access to useful resources, supports collaboration, and creates new "
+        "opportunities for personalized learning."
+    ),
+    (
+        "A healthy lifestyle depends on several important habits. Regular exercise, "
+        "balanced nutrition, and adequate sleep contribute to physical wellness, "
+        "mental clarity, and long-term quality of life."
+    ),
+    (
+        "Organizations must adapt to a rapidly changing environment. Strategic "
+        "leadership, continuous innovation, and data-driven decision making enable "
+        "businesses to remain competitive and serve customers effectively."
+    ),
+    (
+        "Environmental sustainability is a shared responsibility. Individuals, "
+        "businesses, and governments can conserve resources, reduce waste, and promote "
+        "practices that protect the planet for future generations."
+    ),
+]
+
 SCENARIOS = [
     {
-        "name": "my own writing",
+        "name": "personal-style false positives",
         "criterion": 1,
-        # ⚠️ PUT YOUR OWN WRITING HERE. Not AI text, not a sample from the web —
-        # things you actually wrote. This is the criterion that matters most and
-        # it's meaningless with someone else's prose.
-        "texts": [
-            "REPLACE ME with a paragraph you wrote yourself.",
-            "REPLACE ME with another one. Ten pieces is the usual number.",
-        ],
+        # The user asked the assistant to draft these at their diction level.
+        # They are useful proxy inputs, but are not represented as human-authored.
+        "texts": PERSONAL_STYLE_SAMPLES,
+    },
+    {
+        "name": "source score spread",
+        "criterion": 2,
+        "groups": {"human": 5, "ai": 5},
+        "texts": PERSONAL_STYLE_SAMPLES[:5] + AI_SAMPLES,
     },
     {
         "name": "label coverage",
-        "criterion": 2,
-        # Inputs spread across your score range, so you can check all three
-        # labels are actually reachable.
+        "criterion": 3,
+        # These previously produced three examples in each configured band.
         "texts": [
-            "REPLACE ME with something you're confident is AI-generated.",
-            "REPLACE ME with something you're confident is human-written.",
-            "REPLACE ME with something genuinely borderline.",
+            *[_attack_text(item) for item in ("EV01", "EV05", "PI02")],
+            *[_attack_text(item) for item in ("EV03", "EV04", "PI06")],
+            *[_attack_text(item) for item in ("EV10", "FP05", "FP03")],
         ],
     },
-    # A bad-input criterion looks like this. Uncomment and adjust if that's one
-    # of your five — these are raw request bodies, sent exactly as written.
-    #
-    # {
-    #     "name": "bad input",
-    #     "criterion": 3,
-    #     "bodies": [
-    #         {"text": "", "creator_id": "eval_bad_empty"},
-    #         {"creator_id": "eval_bad_missing"},          # no text field at all
-    #         {"text": "word " * 50000, "creator_id": "eval_bad_huge"},
-    #         {"text": None, "creator_id": "eval_bad_null"},
-    #     ],
-    # },
-
-    # TODO: add what your remaining criteria need.
-    #
-    # A criterion about the appeal path can't be tested by sending text alone;
-    # it needs a submission first and then an appeal against the content_id
-    # that came back. You'll need to test that one by hand, or extend this file
-    # and run_eval.py to do it. Saying which you did is part of the write-up.
+    {
+        "name": "appeal path",
+        "criterion": 4,
+        "kind": "appeal",
+        "texts": PERSONAL_STYLE_SAMPLES[:5],
+    },
+    {
+        "name": "bad text input",
+        "criterion": 5,
+        "kind": "bad_input",
+        "bodies": [
+            {"creator_id": "eval_bad_missing"},
+            {"text": "", "creator_id": "eval_bad_empty"},
+            {"text": "   \t\n", "creator_id": "eval_bad_whitespace"},
+            {"text": 12345, "creator_id": "eval_bad_number"},
+            {"text": "x" * 20_001, "creator_id": "eval_bad_huge"},
+        ],
+    },
 ]
 
 
