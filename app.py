@@ -238,6 +238,20 @@ def submit():
             "error": "text_too_long",
             "message": "text must be 20,000 characters or fewer.",
         }), 400
+    has_unsafe_controls = any(
+        ord(character) < 32 and character not in "\n\r\t"
+        for character in text
+    )
+    if len(stylometry.words(text)) < 3 or has_unsafe_controls:
+        audit.log_rejection(
+            creator_id=creator_id if isinstance(creator_id, str) and creator_id.strip() else "unknown",
+            reason="text_unscorable",
+            http_status=400,
+        )
+        return jsonify({
+            "error": "text_unscorable",
+            "message": "text must contain at least three supported words.",
+        }), 400
     if not isinstance(creator_id, str) or not creator_id.strip():
         audit.log_rejection(
             creator_id="unknown",
